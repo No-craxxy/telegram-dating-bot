@@ -1387,9 +1387,12 @@ bot.on("location", async (ctx, next) => {
 
     const options = {
       hostname: 'nominatim.openstreetmap.org',
-      path: `/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1`,
+      path: `/reverse?format=json&lat=${lat}&lon=${lon}&zoom=14&addressdetails=1`,
       method: 'GET',
-      headers: { 'User-Agent': 'EthioMatchTelegramBot' }
+      headers: { 
+        'User-Agent': 'EthioMatchTelegramBot',
+        'Accept-Language': 'en-US,en;q=0.9'
+      }
     };
 
     https.get(options, (res) => {
@@ -1399,7 +1402,30 @@ bot.on("location", async (ctx, next) => {
         let city = "Shared Location";
         try {
           const parsed = JSON.parse(data);
-          city = parsed.address.city || parsed.address.town || parsed.address.village || parsed.address.county || parsed.address.state || "Shared Location";
+          
+          const getCleanName = (name) => {
+            if (!name) return null;
+            if (name.includes('/')) {
+              const parts = name.split('/');
+              const englishPart = parts.find(p => /^[a-zA-Z\s\-]+$/.test(p.trim()));
+              return englishPart ? englishPart.trim() : parts[parts.length - 1].trim();
+            }
+            return name.trim();
+          };
+
+          const rawSub = parsed.address.suburb || parsed.address.neighbourhood || parsed.address.city_district || parsed.address.quarter || parsed.address.borough;
+          const rawCity = parsed.address.city || parsed.address.town || parsed.address.village || parsed.address.county || parsed.address.state;
+          
+          const cleanSub = getCleanName(rawSub);
+          const cleanCity = getCleanName(rawCity);
+
+          if (cleanSub && cleanCity && cleanSub !== cleanCity) {
+            city = `${cleanSub}, ${cleanCity}`;
+          } else if (cleanCity) {
+            city = cleanCity;
+          } else if (cleanSub) {
+            city = cleanSub;
+          }
         } catch (e) { }
 
         if (isEditing) {
