@@ -531,6 +531,7 @@ bot.command("profile", async (ctx) => {
   // Reuse the same rich HTML formatting as candidate cards
   const safeName = escapeHtml(user.name || "Unknown");
   const safeAge = escapeHtml(user.age || "?");
+  const safeLocation = escapeHtml(user.location || "Not set");
   const safeIntention = escapeHtml(intentionText);
   const safeGender = escapeHtml(user.gender || "Not set");
   const safeLooking = escapeHtml(user.looking || "Not set");
@@ -541,6 +542,7 @@ bot.command("profile", async (ctx) => {
 
   const profileText =
     `👤 <b>${safeName}, ${safeAge}</b>\n\n` +
+    `📍 <b>Location</b>: ${safeLocation}\n\n` +
     `⚧️ <b>Gender</b>: ${safeGender}\n\n` +
     `❤️ <b>Looking for</b>: ${safeLooking}\n\n` +
     `${safeIntention ? `💘 <i>${safeIntention}</i>\n\n` : ""}` +
@@ -620,18 +622,19 @@ bot.command("edit", async (ctx) => {
       Markup.button.callback("🎂 Age", "edit_age")
     ],
     [
-      Markup.button.callback("📝 Bio", "edit_bio"),
+      Markup.button.callback("📍 Location", "edit_location"),
       Markup.button.callback("⚧ Gender", "edit_gender")
     ],
     [
-      Markup.button.callback("💘 What I'm looking for", "edit_intention"),
-      Markup.button.callback("❤️ Looking for", "edit_looking")
+      Markup.button.callback("📝 Bio", "edit_bio"),
+      Markup.button.callback("💘 What I'm looking for", "edit_intention")
     ],
     [
-      Markup.button.callback("🏷️ Interests", "edit_interests"),
-      Markup.button.callback("📸 Photo/video", "edit_photo")
+      Markup.button.callback("❤️ Looking for", "edit_looking"),
+      Markup.button.callback("🏷️ Interests", "edit_interests")
     ],
     [
+      Markup.button.callback("📸 Photo/video", "edit_photo"),
       Markup.button.callback("✨ Edit everything", "edit_all_start")
     ]
   ]);
@@ -747,6 +750,7 @@ bot.action("finish_photos", async (ctx) => {
     name: session.name || ctx.from.first_name || "Unknown",
     username: ctx.from.username || null,
     age: session.age,
+    location: session.location || "",
     bio: session.bio || "",
     gender: session.gender,
     looking: session.looking,
@@ -874,6 +878,27 @@ bot.action("edit_age", async (ctx) => {
 
   await ctx.answerCbQuery();
   await ctx.reply("Please send your new age (number).");
+});
+
+// -------------------------------------------
+// ❤️ EDIT LOCATION
+// -------------------------------------------
+bot.action("edit_location", async (ctx) => {
+  const userId = ctx.from.id;
+  const db = await loadDB();
+
+  if (!db.users[userId]) {
+    return ctx.answerCbQuery("No profile found. Use /create first.", { show_alert: true });
+  }
+
+  const session = getSession(userId);
+  session.step = "edit_location";
+
+  await ctx.answerCbQuery();
+  const keyboard = Markup.keyboard([
+    [Markup.button.locationRequest("📍 Share my location")]
+  ]).resize().oneTime();
+  await ctx.reply("What is your new city/location?", keyboard);
 });
 
 // -------------------------------------------
@@ -1231,6 +1256,7 @@ bot.on(["video", "video_note"], async (ctx, next) => {
       `💌 You received a video message from ${senderName}${senderUsername ? ` (@${senderUsername})` : ''}:\n\n` +
       `━━━━━━━━━━━━━━━━\n\n` +
       `👤 ${senderName}, ${me.age || "?"}\n\n` +
+      `📍 Location: ${me.location || "Not set"}\n\n` +
       `⚧️ ${me.gender === "male" ? "♂️ Male" : "♀️ Female"}\n\n` +
       `${intentionText ? `💘 ${intentionText}\n\n` : ""}` +
       `📝 ${me.bio || "No bio"}\n\n` +
@@ -1318,6 +1344,77 @@ bot.on(["video", "video_note"], async (ctx, next) => {
   }
 
   // If not waiting for a message, pass to next handler
+  return next();
+});
+
+// -------------------------------------------
+// ❤️ LOCATION HANDLING
+// -------------------------------------------
+const https = require('https');
+bot.on("location", async (ctx, next) => {
+  const userId = ctx.from.id;
+  const session = getSession(userId);
+
+  if (session.step === "ask_location" || session.step === "edit_location") {
+    const lat = ctx.message.location.latitude;
+    const lon = ctx.message.location.longitude;
+    const isEditing = session.step === "edit_location";
+    
+    const options = {
+      hostname: 'nominatim.openstreetmap.org',
+      path: `/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1`,
+      method: 'GET',
+      headers: { 'User-Agent': 'EthioMatchTelegramBot' }
+    };
+    
+    https.get(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', async () => {
+        let city = "Shared Location";
+        try {
+          const parsed = JSON.parse(data);
+          city = parsed.address.city || parsed.address.town || parsed.address.village || parsed.address.county || parsed.address.state || "Shared Location";
+        } catch(e) { }
+        
+        if (isEditing) {
+          const db = await loadDB();
+          const user = db.users[userId];
+          if (user) await saveUser(userId, { ...user, location: city });
+          session.step = null;
+          ctx.reply(`📍 Got it! Location updated to: ${city}`, { reply_markup: { remove_keyboard: true } });
+          try { await showNext(userId, ctx); } catch (e) {}
+        } else {
+          session.location = city;
+          session.step = "ask_gender";
+          ctx.reply(`Got it! Location set to: ${city}`, {
+            reply_markup: { remove_keyboard: true }
+          }).then(() => {
+            ctx.reply("What's your gender? ⚧", genderButtons());
+          });
+        }
+      });
+    }).on('error', async () => {
+      if (isEditing) {
+        const db = await loadDB();
+        const user = db.users[userId];
+        if (user) await saveUser(userId, { ...user, location: "Shared Location" });
+        session.step = null;
+        ctx.reply("📍 Got it! Location updated!", { reply_markup: { remove_keyboard: true } });
+        try { await showNext(userId, ctx); } catch (e) {}
+      } else {
+        session.location = "Shared Location";
+        session.step = "ask_gender";
+        ctx.reply("Got it! 📍", {
+          reply_markup: { remove_keyboard: true }
+        }).then(() => {
+          ctx.reply("What's your gender? ⚧", genderButtons());
+        });
+      }
+    });
+    return;
+  }
+  
   return next();
 });
 
@@ -1426,8 +1523,23 @@ bot.on("text", async (ctx, next) => {
       return ctx.reply("Please enter a valid number for your age.");
     }
     session.age = text;
+    session.step = "ask_location";
+    const keyboard = Markup.keyboard([
+      [Markup.button.locationRequest("📍 Share my location")]
+    ]).resize().oneTime();
+    ctx.reply("What city are you from?", keyboard);
+    return;
+  }
+
+  // STEP 1.5 - Location (create)
+  if (session.step === "ask_location") {
+    session.location = text.trim();
     session.step = "ask_gender";
-    ctx.reply(" What's your gender? ⚧", genderButtons());
+    ctx.reply("Got it! 📍", {
+      reply_markup: { remove_keyboard: true }
+    }).then(() => {
+      ctx.reply("What's your gender? ⚧", genderButtons());
+    });
     return;
   }
 
@@ -1480,6 +1592,27 @@ bot.on("text", async (ctx, next) => {
       await showNext(userId, ctx);
     } catch (e) {
       console.error("Error auto-starting match after age edit:", e);
+    }
+    return;
+  }
+
+  // EDIT LOCATION
+  if (session.step === "edit_location") {
+    const db = await loadDB();
+    const user = db.users[userId];
+    if (!user) {
+      session.step = null;
+      return ctx.reply("You don't have a profile yet. Use /create first.");
+    }
+    await saveUser(userId, { ...user, location: text.trim() });
+    session.step = null;
+    ctx.reply("📍 Your location has been updated.", { reply_markup: { remove_keyboard: true } });
+
+    // Auto-start matching
+    try {
+      await showNext(userId, ctx);
+    } catch (e) {
+      console.error("Error auto-starting match after location edit:", e);
     }
     return;
   }
@@ -1610,7 +1743,7 @@ bot.on("text", async (ctx, next) => {
                          me.intention === "exploring" ? "Just exploring 😏" :
                          "";
     
-    const profileText = `💌 You received a message from ${senderName}${senderUsername ? ` (@${senderUsername})` : ''}:\n\n"${text}"\n\n━━━━━━━━━━━━━━━━\n\n👤 ${senderName}, ${me.age || "?"}\n\n⚧️ ${me.gender === "male" ? "♂️ Male" : "♀️ Female"}\n\n${intentionText ? `💘 ${intentionText}\n\n` : ""}📝 ${me.bio || "No bio"}\n\n💬 ${senderContact}`;
+    const profileText = `💌 You received a message from ${senderName}${senderUsername ? ` (@${senderUsername})` : ''}:\n\n"${text}"\n\n━━━━━━━━━━━━━━━━\n\n👤 ${senderName}, ${me.age || "?"}\n\n📍 Location: ${me.location || "Not set"}\n\n⚧️ ${me.gender === "male" ? "♂️ Male" : "♀️ Female"}\n\n${intentionText ? `💘 ${intentionText}\n\n` : ""}📝 ${me.bio || "No bio"}\n\n💬 ${senderContact}`;
     
     // Create buttons to like back or skip
     const messageButtons = Markup.inlineKeyboard([
@@ -1939,6 +2072,7 @@ bot.on(["photo", "video"], async (ctx) => {
         name: session.name || ctx.from.first_name || "Unknown",
         username: ctx.from.username || null,
         age: session.age,
+        location: session.location || "",
         bio: session.bio || "",
         gender: session.gender,
         looking: session.looking,
@@ -1996,6 +2130,7 @@ bot.on(["photo", "video"], async (ctx) => {
           name: session.name || ctx.from.first_name || "Unknown",
           username: ctx.from.username || null,
           age: session.age,
+          location: session.location || "",
           bio: session.bio || "",
           gender: session.gender,
           looking: session.looking,
@@ -2393,12 +2528,14 @@ async function showCandidate(userId, ctx) {
 
   const safeName = escapeHtml(target.name || "Unknown");
   const safeAge = escapeHtml(target.age || "?");
+  const safeLocation = escapeHtml(target.location || "Not set");
   const safeIntention = escapeHtml(intentionText);
   const bioText = target.bio && String(target.bio).trim().length > 0 ? String(target.bio).trim() : "No bio";
   const safeBio = escapeHtml(bioText);
 
   const candidateText =
     `👤 <b>${safeName}, ${safeAge}</b>\n\n` +
+    `📍 <b>Location</b>: ${safeLocation}\n\n` +
     `${safeIntention ? `💘 <i>${safeIntention}</i>\n\n` : ""}` +
     `${commonInterestLineHtml}` +
     `${interestsLineHtml}` +
@@ -2932,8 +3069,10 @@ bot.command("matches", async (ctx) => {
           : `[${escapeMarkdown(person.name || "User")}](tg://user?id=${person.id})`;
           
         const interestsText = formatInterests(person.interests);
+        const safeLocation = escapeMarkdown(person.location || "Not set");
         const profileText = 
           `👤 ${escapeMarkdown(person.name || "Unknown")}, ${escapeMarkdown(String(person.age || "?"))}\n\n` +
+          `📍 Location: ${safeLocation}\n\n` +
           `⚧️ ${person.gender === "male" ? "♂️ Male" : "♀️ Female"}\n\n` +
           `${intentionText ? `💘 ${escapeMarkdown(intentionText)}\n\n` : ""}` +
           `${interestsText ? `🏷️ ${escapeMarkdown(interestsText)}\n\n` : ""}` +
@@ -3028,8 +3167,10 @@ bot.command("matches", async (ctx) => {
           : `[${escapeMarkdown(person.name || "User")}](tg://user?id=${person.id})`;
           
         const interestsText = formatInterests(person.interests);
+        const safeLocation = escapeMarkdown(person.location || "Not set");
         const profileText = 
           `👤 ${escapeMarkdown(person.name || "Unknown")}, ${escapeMarkdown(String(person.age || "?"))}\n\n` +
+          `📍 Location: ${safeLocation}\n\n` +
           `⚧️ ${person.gender === "male" ? "♂️ Male" : "♀️ Female"}\n\n` +
           `${intentionText ? `💘 ${escapeMarkdown(intentionText)}\n\n` : ""}` +
           `${interestsText ? `🏷️ ${escapeMarkdown(interestsText)}\n\n` : ""}` +
