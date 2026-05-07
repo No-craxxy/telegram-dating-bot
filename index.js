@@ -970,7 +970,7 @@ bot.action("edit_intention", async (ctx) => {
   }
 
   await ctx.answerCbQuery();
-  await ctx.reply("💘 What are you looking for on AAU MatchUps?", intentionButtons());
+  await ctx.reply("💘 What are you looking for on EthioMatch?", intentionButtons());
 });
 
 bot.action(/edit_intention_(.+)/, async (ctx) => {
@@ -1765,7 +1765,7 @@ bot.action(/look_(.+)/, async (ctx) => {
   session.step = "ask_intention";
 
   await ctx.answerCbQuery();
-  await ctx.reply("💘 What are you looking for on AAU MatchUps?", intentionButtons());
+  await ctx.reply("💘 What are you looking for on EthioMatch?", intentionButtons());
 });
 
 // -------------------------------------------
@@ -3320,7 +3320,7 @@ connectDB().then((connected) => {
   
   return bot.launch();
 }).then(async () => {
-  console.log("❤️ Dating Bot is running...");
+  console.log("❤️ EthioMatch is running...");
   lastHealthCheck = Date.now();
   
   // Set bot commands menu
