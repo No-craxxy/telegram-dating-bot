@@ -1412,11 +1412,9 @@ bot.on("location", async (ctx, next) => {
         } else {
           session.location = city;
           session.step = "ask_gender";
-          ctx.reply(`Got it! Location set to: ${city}`, {
-            reply_markup: { remove_keyboard: true }
-          }).then(() => {
-            ctx.reply("What's your gender? ⚧", genderButtons());
-          });
+          await ctx.reply(`Got it! Location set to: ${city}`, { reply_markup: { remove_keyboard: true } });
+          await new Promise(r => setTimeout(r, 50));
+          await ctx.reply("What's your gender? ⚧", genderButtons());
         }
       });
     }).on('error', async () => {
@@ -1430,11 +1428,9 @@ bot.on("location", async (ctx, next) => {
       } else {
         session.location = "Shared Location";
         session.step = "ask_gender";
-        ctx.reply("Got it! 📍", {
-          reply_markup: { remove_keyboard: true }
-        }).then(() => {
-          ctx.reply("What's your gender? ⚧", genderButtons());
-        });
+        await ctx.reply("Got it! 📍", { reply_markup: { remove_keyboard: true } });
+        await new Promise(r => setTimeout(r, 50));
+        await ctx.reply("What's your gender? ⚧", genderButtons());
       }
     });
     return;
@@ -1560,11 +1556,9 @@ bot.on("text", async (ctx, next) => {
   if (session.step === "ask_location") {
     session.location = text.trim();
     session.step = "ask_gender";
-    ctx.reply("Got it! 📍", {
-      reply_markup: { remove_keyboard: true }
-    }).then(() => {
-      ctx.reply("What's your gender? ⚧", genderButtons());
-    });
+    await ctx.reply("Got it! 📍", { reply_markup: { remove_keyboard: true } });
+    await new Promise(r => setTimeout(r, 50));
+    await ctx.reply("What's your gender? ⚧", genderButtons());
     return;
   }
 
