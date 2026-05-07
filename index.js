@@ -49,12 +49,12 @@ async function connectDB() {
     reportsCollection = db.collection("reports");
     deletionReasonsCollection = db.collection("deletionReasons");
     console.log("✅ Connected to MongoDB Atlas");
-    
+
     // Create indexes for better performance
     await usersCollection.createIndex({ id: 1 }, { unique: true });
     await reportsCollection.createIndex({ reporterId: 1, reportedId: 1 });
     await deletionReasonsCollection.createIndex({ userId: 1 });
-    
+
     return true;
   } catch (error) {
     console.error("[DB ERROR] Failed to connect to MongoDB:", error.message);
@@ -70,10 +70,10 @@ async function loadDB() {
     usersArray.forEach(user => {
       users[user.id] = user;
     });
-    
+
     // Get reports
     const reportsArray = await reportsCollection.find({}).toArray();
-    
+
     return { users, reports: reportsArray };
   } catch (e) {
     console.error("[DB ERROR] Error loading DB:", e.message);
@@ -148,14 +148,14 @@ async function checkAndResetDailySwipes(userId) {
   try {
     // OPTIMIZED: Direct MongoDB query instead of loading all users
     const user = await usersCollection.findOne({ id: userId }, { projection: { dailySwipes: 1, lastSwipeReset: 1 } });
-    
+
     if (!user) return 0;
-    
+
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const lastReset = user.lastSwipeReset ? new Date(user.lastSwipeReset) : null;
     const lastResetDate = lastReset ? new Date(lastReset.getFullYear(), lastReset.getMonth(), lastReset.getDate()) : null;
-    
+
     // If last reset was not today, reset daily swipes
     if (!lastResetDate || lastResetDate.getTime() !== today.getTime()) {
       await usersCollection.updateOne(
@@ -164,7 +164,7 @@ async function checkAndResetDailySwipes(userId) {
       );
       return 0; // Return 0 as current daily swipes after reset
     }
-    
+
     return user.dailySwipes || 0;
   } catch (e) {
     console.error("[DB ERROR] Error checking daily swipes:", e.message);
@@ -196,16 +196,16 @@ async function getAvailableSwipes(userId) {
   try {
     // OPTIMIZED: Direct MongoDB query with projection - only fetch needed fields
     const user = await usersCollection.findOne(
-      { id: userId }, 
+      { id: userId },
       { projection: { dailySwipes: 1, lastSwipeReset: 1, purchasedSwipes: 1 } }
     );
-    
+
     if (!user) return { free: 0, purchased: 0, total: 0 };
-    
+
     const dailySwipes = await checkAndResetDailySwipes(userId);
     const purchasedSwipes = user.purchasedSwipes || 0;
     const freeSwipesRemaining = Math.max(0, 20 - dailySwipes);
-    
+
     return {
       free: freeSwipesRemaining,
       purchased: purchasedSwipes,
@@ -234,12 +234,12 @@ async function createSwipePackageInvoice(userId, packageType) {
         swipes: 80
       }
     };
-    
+
     const pkg = packages[packageType];
     if (!pkg) {
       throw new Error('Invalid package type');
     }
-    
+
     const invoice = {
       title: pkg.title,
       description: pkg.description,
@@ -250,7 +250,7 @@ async function createSwipePackageInvoice(userId, packageType) {
       max_tip_amount: 0,
       suggested_tip_amounts: []
     };
-    
+
     const invoiceLink = await bot.telegram.createInvoiceLink(invoice);
     return { invoiceLink, package: pkg };
   } catch (e) {
@@ -295,6 +295,27 @@ function getSession(userId) {
   }
   return sessions[userId];
 }
+
+// -------------------------------------------
+// ❤️ GLOBAL MIDDLEWARE (Clear state on commands)
+// -------------------------------------------
+bot.use(async (ctx, next) => {
+  if (ctx.message && ctx.message.text && ctx.message.text.startsWith("/")) {
+    const userId = ctx.from.id;
+    const session = getSession(userId);
+
+    // Clear any stuck reply keyboards if they abandoned a location prompt
+    if (session.step === "ask_location" || session.step === "edit_location") {
+      try {
+        const msg = await ctx.reply("🔄 Closing prompt...", { reply_markup: { remove_keyboard: true } });
+        setTimeout(() => { ctx.deleteMessage(msg.message_id).catch(() => { }); }, 1500);
+      } catch (e) { }
+    }
+
+    session.step = null;
+  }
+  return next();
+});
 
 // -------------------------------------------
 // ❤️ /start COMMAND
@@ -523,11 +544,11 @@ bot.command("profile", async (ctx) => {
 
   // Format intention text
   const intentionText = user.intention === "serious" ? "Serious relationship" :
-                       user.intention === "casual" ? "Casual dating" :
-                       user.intention === "friendship" ? "Friendship only" :
-                       user.intention === "exploring" ? "Just exploring 😏" :
-                       "Not set";
-  
+    user.intention === "casual" ? "Casual dating" :
+      user.intention === "friendship" ? "Friendship only" :
+        user.intention === "exploring" ? "Just exploring 😏" :
+          "Not set";
+
   // Reuse the same rich HTML formatting as candidate cards
   const safeName = escapeHtml(user.name || "Unknown");
   const safeAge = escapeHtml(user.age || "?");
@@ -564,13 +585,13 @@ bot.command("profile", async (ctx) => {
     } else {
       // Support multiple photos (2-3)
       const photos = user.photos || (user.photo ? [user.photo] : []);
-      
+
       if (photos.length > 0) {
         if (photos.length === 1) {
           // Single photo
           await Promise.race([
             ctx.replyWithPhoto(photos[0], { caption: profileText, parse_mode: 'HTML' }),
-            new Promise((_, reject) => 
+            new Promise((_, reject) =>
               setTimeout(() => reject(new Error('Photo send timeout')), 10000)
             )
           ]);
@@ -582,10 +603,10 @@ bot.command("profile", async (ctx) => {
             caption: index === 0 ? profileText : undefined, // Only caption on first photo
             parse_mode: index === 0 ? 'HTML' : undefined
           }));
-          
+
           await Promise.race([
             ctx.replyWithMediaGroup(media),
-            new Promise((_, reject) => 
+            new Promise((_, reject) =>
               setTimeout(() => reject(new Error('Photo send timeout')), 10000)
             )
           ]);
@@ -738,12 +759,12 @@ bot.action("edit_photo", async (ctx) => {
 bot.action("finish_photos", async (ctx) => {
   const userId = ctx.from.id;
   const session = getSession(userId);
-  
+
   if (!session.photos || session.photos.length < 2) {
     await ctx.answerCbQuery("Please upload at least 2 photos");
     return;
   }
-  
+
   const db = await loadDB();
   const userData = {
     id: userId,
@@ -764,18 +785,18 @@ bot.action("finish_photos", async (ctx) => {
     lastSwipeReset: Date.now(),
     purchasedSwipes: 0
   };
-  
+
   await saveUser(userId, userData);
-  
+
   session.step = null;
   session.photos = null;
   session.shown = [];
   session.queue = null;
   session.lastPreference = null;
-  
+
   await ctx.answerCbQuery();
-  await ctx.reply("🔥 Profile complete! Your profile is now ready ❤️\n\nUse /match to start swiping!");
-  
+  await ctx.reply("🔥 Profile complete! Your profile is now ready ❤️\n\nUse /match to start swiping!", { reply_markup: { remove_keyboard: true } });
+
   try {
     await showNext(userId, ctx);
   } catch (e) {
@@ -788,31 +809,31 @@ bot.action("finish_edit_photos", async (ctx) => {
   const session = getSession(userId);
   const db = await loadDB();
   const user = db.users[userId];
-  
+
   if (!user) {
     await ctx.answerCbQuery("No profile found");
     return;
   }
-  
+
   if (!session.editPhotos || session.editPhotos.length < 2) {
     await ctx.answerCbQuery("Please upload at least 2 photos");
     return;
   }
-  
+
   const photosCount = session.editPhotos.length;
-  
+
   await saveUser(userId, {
     ...user,
     photos: session.editPhotos,
     photo: session.editPhotos[0]
   });
-  
+
   session.step = null;
   session.editPhotos = null;
-  
+
   await ctx.answerCbQuery("Media updated ✅");
   await ctx.reply(`📸 Your ${photosCount} profile photo(s) have been updated!`);
-  
+
   try {
     await showNext(userId, ctx);
   } catch (e) {
@@ -1012,9 +1033,9 @@ bot.action(/edit_intention_(.+)/, async (ctx) => {
   await saveUser(userId, { ...db.users[userId], intention: intention });
 
   const intentionText = intention === "serious" ? "Serious relationship" :
-                       intention === "casual" ? "Casual dating" :
-                       intention === "friendship" ? "Friendship only" :
-                       intention === "exploring" ? "Just exploring 😏" : intention;
+    intention === "casual" ? "Casual dating" :
+      intention === "friendship" ? "Friendship only" :
+        intention === "exploring" ? "Just exploring 😏" : intention;
 
   await ctx.answerCbQuery("Intention updated ✅");
   await ctx.reply(`💘 Your intention has been updated to: ${intentionText}`);
@@ -1149,7 +1170,7 @@ bot.on(["video", "video_note"], async (ctx, next) => {
     // 1. Get the File ID
     let fileId;
     let type;
-    
+
     if (ctx.message.video_note) {
       fileId = ctx.message.video_note.file_id;
       type = "video_note"; // The circle video
@@ -1187,21 +1208,21 @@ bot.on(["video", "video_note"], async (ctx, next) => {
     if (!me.likes.includes(targetId)) {
       me.likes.push(targetId);
     }
-    
+
     let matchFound = false;
     if (!targetUser.likes) targetUser.likes = [];
     targetUser.likes = targetUser.likes.map(id => parseInt(id)).filter(id => !isNaN(id));
-    
+
     if (targetUser.likes.includes(userId)) {
       matchFound = true;
       if (!me.matches) me.matches = [];
       if (!targetUser.matches) targetUser.matches = [];
       me.matches = me.matches.map(id => parseInt(id)).filter(id => !isNaN(id));
       targetUser.matches = targetUser.matches.map(id => parseInt(id)).filter(id => !isNaN(id));
-      
+
       if (!me.matches.includes(targetId)) me.matches.push(targetId);
       if (!targetUser.matches.includes(userId)) targetUser.matches.push(userId);
-      
+
       // Notify target user about match
       try {
         const matchMessage = `🎉❤️ IT'S A MATCH!\n\n${me.name} liked you back and sent you a video message!\n\nSend them a message: ${me.username || ctx.from.username ? `@${me.username || ctx.from.username}` : `[${me.name || "User"}](tg://user?id=${userId})`}`;
@@ -1211,7 +1232,7 @@ bot.on(["video", "video_note"], async (ctx, next) => {
             matchMessage,
             { parse_mode: 'Markdown' }
           ),
-          new Promise((_, reject) => 
+          new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Message send timeout')), 10000)
           )
         ]);
@@ -1224,7 +1245,7 @@ bot.on(["video", "video_note"], async (ctx, next) => {
       targetUser.recentLikes = targetUser.recentLikes.map(id => parseInt(id)).filter(id => !isNaN(id));
       targetUser.recentLikes = targetUser.recentLikes.filter(id => id !== userId);
       targetUser.recentLikes.push(userId);
-      
+
       // Send notification about the like
       try {
         await Promise.race([
@@ -1232,7 +1253,7 @@ bot.on(["video", "video_note"], async (ctx, next) => {
             targetId,
             `❤️ Someone sent you a video message!\n\nSee who it is: /matches`
           ),
-          new Promise((_, reject) => 
+          new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Message send timeout')), 10000)
           )
         ]);
@@ -1247,10 +1268,10 @@ bot.on(["video", "video_note"], async (ctx, next) => {
     const senderContact = senderUsername ? `@${senderUsername}` : `[${senderName}](tg://user?id=${userId})`;
 
     const intentionText = me.intention === "serious" ? "Serious relationship" :
-                         me.intention === "casual" ? "Casual dating" :
-                         me.intention === "friendship" ? "Friendship only" :
-                         me.intention === "exploring" ? "Just exploring 😏" :
-                         "";
+      me.intention === "casual" ? "Casual dating" :
+        me.intention === "friendship" ? "Friendship only" :
+          me.intention === "exploring" ? "Just exploring 😏" :
+            "";
 
     const caption =
       `💌 You received a video message from ${senderName}${senderUsername ? ` (@${senderUsername})` : ''}:\n\n` +
@@ -1261,7 +1282,7 @@ bot.on(["video", "video_note"], async (ctx, next) => {
       `${intentionText ? `💘 ${intentionText}\n\n` : ""}` +
       `📝 ${me.bio || "No bio"}\n\n` +
       `💬 ${senderContact}`;
-    
+
     // Buttons for the target
     const messageButtons = Markup.inlineKeyboard([
       [
@@ -1292,7 +1313,7 @@ bot.on(["video", "video_note"], async (ctx, next) => {
           }
         );
       }
-      
+
       if (matchFound) {
         await ctx.reply(`🔥 You MATCHED with ${targetUser.name || "user"}!\n✅ Video message sent!\n\nUse /matches to see list.`);
       } else {
@@ -1323,17 +1344,17 @@ bot.on(["video", "video_note"], async (ctx, next) => {
 
     session.step = null;
     session.messageTargetId = null;
-    
+
     // Check swipe limit - if reached, don't continue showing profiles (reuse availableSwipes from above)
     if (availableSwipes.total <= 0) {
       return;
     }
-    
+
     // Wait a bit if match found
     if (matchFound) {
       await new Promise(resolve => setTimeout(resolve, 1500));
     }
-    
+
     // Continue showing profiles automatically (only if user has swipes remaining)
     try {
       await showCandidate(userId, ctx);
@@ -1355,18 +1376,22 @@ bot.on("location", async (ctx, next) => {
   const userId = ctx.from.id;
   const session = getSession(userId);
 
+  if (session.step !== "ask_location" && session.step !== "edit_location") {
+    return ctx.reply("📍 Location dismissed.", { reply_markup: { remove_keyboard: true } });
+  }
+
   if (session.step === "ask_location" || session.step === "edit_location") {
     const lat = ctx.message.location.latitude;
     const lon = ctx.message.location.longitude;
     const isEditing = session.step === "edit_location";
-    
+
     const options = {
       hostname: 'nominatim.openstreetmap.org',
       path: `/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1`,
       method: 'GET',
       headers: { 'User-Agent': 'EthioMatchTelegramBot' }
     };
-    
+
     https.get(options, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
@@ -1375,15 +1400,15 @@ bot.on("location", async (ctx, next) => {
         try {
           const parsed = JSON.parse(data);
           city = parsed.address.city || parsed.address.town || parsed.address.village || parsed.address.county || parsed.address.state || "Shared Location";
-        } catch(e) { }
-        
+        } catch (e) { }
+
         if (isEditing) {
           const db = await loadDB();
           const user = db.users[userId];
           if (user) await saveUser(userId, { ...user, location: city });
           session.step = null;
           ctx.reply(`📍 Got it! Location updated to: ${city}`, { reply_markup: { remove_keyboard: true } });
-          try { await showNext(userId, ctx); } catch (e) {}
+          try { await showNext(userId, ctx); } catch (e) { }
         } else {
           session.location = city;
           session.step = "ask_gender";
@@ -1401,7 +1426,7 @@ bot.on("location", async (ctx, next) => {
         if (user) await saveUser(userId, { ...user, location: "Shared Location" });
         session.step = null;
         ctx.reply("📍 Got it! Location updated!", { reply_markup: { remove_keyboard: true } });
-        try { await showNext(userId, ctx); } catch (e) {}
+        try { await showNext(userId, ctx); } catch (e) { }
       } else {
         session.location = "Shared Location";
         session.step = "ask_gender";
@@ -1414,7 +1439,7 @@ bot.on("location", async (ctx, next) => {
     });
     return;
   }
-  
+
   return next();
 });
 
@@ -1437,12 +1462,12 @@ bot.on("text", async (ctx, next) => {
     const userId = ctx.from.id;
     const db = await loadDB();
     const user = db.users[userId];
-    
+
     if (!user) {
       session.waitingForDeletionReason = false;
       return ctx.reply("You don't have a profile to delete.");
     }
-    
+
     // Save deletion reason
     const reasonData = {
       userId: userId,
@@ -1451,40 +1476,40 @@ bot.on("text", async (ctx, next) => {
       reason: text.trim(),
       timestamp: Date.now()
     };
-    
+
     await saveDeletionReason(reasonData);
-    
+
     // Now proceed with deletion
     const userIdNum = parseInt(userId);
-    
+
     // Clean up references from other users' likes and matches arrays
     const allUsers = await usersCollection.find({}).toArray();
     for (const otherUser of allUsers) {
       if (otherUser.id === userIdNum) continue; // Skip the user being deleted
-      
+
       const updates = {};
-      
+
       // Remove from likes array
       if (otherUser.likes && Array.isArray(otherUser.likes)) {
         updates.likes = otherUser.likes
           .map(id => parseInt(id))
           .filter(id => !isNaN(id) && id !== userIdNum);
       }
-      
+
       // Remove from matches array
       if (otherUser.matches && Array.isArray(otherUser.matches)) {
         updates.matches = otherUser.matches
           .map(id => parseInt(id))
           .filter(id => !isNaN(id) && id !== userIdNum);
       }
-      
+
       // Remove from recentLikes array
       if (otherUser.recentLikes && Array.isArray(otherUser.recentLikes)) {
         updates.recentLikes = otherUser.recentLikes
           .map(id => parseInt(id))
           .filter(id => !isNaN(id) && id !== userIdNum);
       }
-      
+
       if (Object.keys(updates).length > 0) {
         await updateUserArrays(otherUser.id, updates);
       }
@@ -1492,17 +1517,17 @@ bot.on("text", async (ctx, next) => {
 
     // Delete the user's profile from MongoDB
     await deleteUser(userId);
-    
+
     // Clear their session completely (including shown list)
     session.queue = null;
     session.step = null;
     session.shown = [];
     session.lastPreference = null;
     session.waitingForDeletionReason = false;
-    
+
     // Also remove from sessions object to fully reset
     delete sessions[userId];
-    
+
     await ctx.reply("Your account is deleted now. Hope you met someone with my help!\n\nAlways happy to chat. If bored, text me /start - I'll find someone special for you.");
     return;
   }
@@ -1645,16 +1670,16 @@ bot.on("text", async (ctx, next) => {
       session.step = null;
       return;
     }
-    
+
     const db = await loadDB();
     const me = db.users[userId];
     const targetUser = db.users[targetId];
-    
+
     if (!me) {
       session.step = null;
       return ctx.reply("❗ We lost your profile due to major upgrade to the bot. Please create it again: /create");
     }
-    
+
     if (!targetUser) {
       session.step = null;
       await ctx.reply("❌ User not found. Continuing with matches...");
@@ -1666,19 +1691,19 @@ bot.on("text", async (ctx, next) => {
       }
       return;
     }
-    
+
     // Add like when sending message (user likes the person they're messaging)
     if (!me.likes) me.likes = [];
     me.likes = me.likes.map(id => parseInt(id)).filter(id => !isNaN(id));
     if (!me.likes.includes(targetId)) {
       me.likes.push(targetId);
     }
-    
+
     // Check for match
     let matchFound = false;
     if (!targetUser.likes) targetUser.likes = [];
     targetUser.likes = targetUser.likes.map(id => parseInt(id)).filter(id => !isNaN(id));
-    
+
     if (targetUser.likes.includes(userId)) {
       matchFound = true;
       // Update match arrays
@@ -1686,10 +1711,10 @@ bot.on("text", async (ctx, next) => {
       if (!targetUser.matches) targetUser.matches = [];
       me.matches = me.matches.map(id => parseInt(id)).filter(id => !isNaN(id));
       targetUser.matches = targetUser.matches.map(id => parseInt(id)).filter(id => !isNaN(id));
-      
+
       if (!me.matches.includes(targetId)) me.matches.push(targetId);
       if (!targetUser.matches.includes(userId)) targetUser.matches.push(userId);
-      
+
       // Notify target user about match
       try {
         const matchMessage = `🎉❤️ IT'S A MATCH!\n\n${me.name} liked you back and sent you a message!\n\nSend them a message: ${me.username || ctx.from.username ? `@${me.username || ctx.from.username}` : `[${me.name || "User"}](tg://user?id=${userId})`}`;
@@ -1699,7 +1724,7 @@ bot.on("text", async (ctx, next) => {
             matchMessage,
             { parse_mode: 'Markdown' }
           ),
-          new Promise((_, reject) => 
+          new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Message send timeout')), 10000)
           )
         ]);
@@ -1713,7 +1738,7 @@ bot.on("text", async (ctx, next) => {
       // Remove if already exists (to avoid duplicates), then add to end (most recent)
       targetUser.recentLikes = targetUser.recentLikes.filter(id => id !== userId);
       targetUser.recentLikes.push(userId); // Add to end = most recent
-      
+
       // Send notification about the like
       try {
         await Promise.race([
@@ -1721,7 +1746,7 @@ bot.on("text", async (ctx, next) => {
             targetId,
             `❤️ Someone liked you!\n\nSee who it is: /matches`
           ),
-          new Promise((_, reject) => 
+          new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Message send timeout')), 10000)
           )
         ]);
@@ -1729,22 +1754,22 @@ bot.on("text", async (ctx, next) => {
         console.error(`[ERROR] Could not notify target user about like:`, e.message);
       }
     }
-    
+
     // Send message to target user WITH PROFILE
     const senderName = me.name || ctx.from.first_name || "Someone";
     const senderUsername = me.username || ctx.from.username;
     const senderContact = senderUsername ? `@${senderUsername}` : `[${senderName}](tg://user?id=${userId})`;
-    
+
     // Create profile text with message (better formatting)
     // Format intention text
     const intentionText = me.intention === "serious" ? "Serious relationship" :
-                         me.intention === "casual" ? "Casual dating" :
-                         me.intention === "friendship" ? "Friendship only" :
-                         me.intention === "exploring" ? "Just exploring 😏" :
-                         "";
-    
+      me.intention === "casual" ? "Casual dating" :
+        me.intention === "friendship" ? "Friendship only" :
+          me.intention === "exploring" ? "Just exploring 😏" :
+            "";
+
     const profileText = `💌 You received a message from ${senderName}${senderUsername ? ` (@${senderUsername})` : ''}:\n\n"${text}"\n\n━━━━━━━━━━━━━━━━\n\n👤 ${senderName}, ${me.age || "?"}\n\n📍 Location: ${me.location || "Not set"}\n\n⚧️ ${me.gender === "male" ? "♂️ Male" : "♀️ Female"}\n\n${intentionText ? `💘 ${intentionText}\n\n` : ""}📝 ${me.bio || "No bio"}\n\n💬 ${senderContact}`;
-    
+
     // Create buttons to like back or skip
     const messageButtons = Markup.inlineKeyboard([
       [
@@ -1755,14 +1780,14 @@ bot.on("text", async (ctx, next) => {
         Markup.button.callback("🚫 Report", `report_${userId}`)
       ]
     ]);
-    
+
     // Check swipe limit before sending message (for message confirmation text)
     let availableSwipes = await getAvailableSwipes(userId);
-    
+
     try {
       // Send profile with photos if available (support multiple photos)
       const photos = me.photos || (me.photo ? [me.photo] : []);
-      
+
       if (photos.length > 0) {
         if (photos.length === 1) {
           // Single photo - can attach buttons directly
@@ -1772,7 +1797,7 @@ bot.on("text", async (ctx, next) => {
               parse_mode: 'Markdown',
               ...messageButtons
             }),
-            new Promise((_, reject) => 
+            new Promise((_, reject) =>
               setTimeout(() => reject(new Error('Photo send timeout')), 10000)
             )
           ]);
@@ -1783,17 +1808,17 @@ bot.on("text", async (ctx, next) => {
             media: photo,
             caption: index === 0 ? profileText : undefined // Only caption on first photo
           }));
-          
+
           await Promise.race([
             ctx.telegram.sendMediaGroup(targetId, media),
-            new Promise((_, reject) => 
+            new Promise((_, reject) =>
               setTimeout(() => reject(new Error('Photo send timeout')), 10000)
             )
           ]);
-          
+
           // Send buttons separately after the media group
           await ctx.telegram.sendMessage(targetId, "🔥 Looks like a nice profile! Ready to make a move?", messageButtons);
-          
+
           // Send profile text with contact info separately (since media group caption doesn't support markdown links well)
           await ctx.telegram.sendMessage(targetId, profileText, { parse_mode: 'Markdown' });
         }
@@ -1803,12 +1828,12 @@ bot.on("text", async (ctx, next) => {
             parse_mode: 'Markdown',
             ...messageButtons
           }),
-          new Promise((_, reject) => 
+          new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Message send timeout')), 10000)
           )
         ]);
       }
-      
+
       // Use availableSwipes already checked above
       if (matchFound) {
         await ctx.reply(`🔥 You MATCHED with ${targetUser.name || "user"}!\n✅ Message sent!\n\nUse /matches to see list.`);
@@ -1829,7 +1854,7 @@ bot.on("text", async (ctx, next) => {
         await ctx.reply(`⚠️ Could not send message (user may have blocked bot).\n\n⏸️ You've reached your daily swipe limit. Purchase more swipes to continue matching!`);
       }
     }
-    
+
     // Save database
     await updateUserArrays(userId, { likes: me.likes, matches: me.matches });
     if (matchFound) {
@@ -1837,22 +1862,22 @@ bot.on("text", async (ctx, next) => {
     } else {
       await updateUserArrays(targetId, { likes: targetUser.likes, recentLikes: targetUser.recentLikes });
     }
-    
+
     // Clear message step
     session.step = null;
     session.messageTargetId = null;
-    
+
     // Check swipe limit - if reached, don't continue showing profiles (reuse availableSwipes from above)
     if (availableSwipes.total <= 0) {
       // User hit limit - don't continue swiping, but message was sent successfully
       return;
     }
-    
+
     // Wait a bit if match found
     if (matchFound) {
       await new Promise(resolve => setTimeout(resolve, 1500));
     }
-    
+
     // Continue showing profiles automatically (only if user has swipes remaining)
     try {
       await showCandidate(userId, ctx);
@@ -1872,10 +1897,10 @@ bot.on("text", async (ctx, next) => {
 bot.action(/gender_(.+)/, async (ctx) => {
   const userId = ctx.from.id;
   const session = getSession(userId);
-  
-  const fullMatch = ctx.match[0] || ctx.match.input; 
+
+  const fullMatch = ctx.match[0] || ctx.match.input;
   const gender = fullMatch.replace("gender_", "");
-  
+
   session.gender = gender;
   session.step = "ask_looking";
 
@@ -1892,7 +1917,7 @@ bot.action(/look_(.+)/, async (ctx) => {
 
   const fullMatch = ctx.match[0] || ctx.match.input;
   const looking = fullMatch.replace("look_", "");
-  
+
   // Store raw internal value: "men" | "women" | "any"
   session.looking = looking;
   session.step = "ask_intention";
@@ -1907,10 +1932,10 @@ bot.action(/look_(.+)/, async (ctx) => {
 bot.action("skip_bio", async (ctx) => {
   const userId = ctx.from.id;
   const session = getSession(userId);
-  
+
   session.bio = ""; // Empty bio
   session.step = "ask_photo";
-  
+
   await ctx.answerCbQuery();
   await ctx.reply("📸 Perfect! Now send me your profile media.\n\nYou can upload a short video (up to 15 seconds) OR 2-3 photos. Send them one by one, and I'll let you know when you've reached the limit.");
 });
@@ -1936,7 +1961,7 @@ bot.action(/intention_(.+)/, async (ctx) => {
 
   const fullMatch = ctx.match[0] || ctx.match.input;
   const intention = fullMatch.replace("intention_", "");
-  
+
   session.intention = intention;
   session.step = "ask_interests";
   session.interests = [];
@@ -2098,7 +2123,7 @@ bot.on(["photo", "video"], async (ctx) => {
       session.queue = null;
       session.lastPreference = null;
 
-      await ctx.reply("🎥 Video Profile Saved! Your profile is alive! 🎬\n\nUse /match to start swiping.");
+      await ctx.reply("🎥 Video Profile Saved! Your profile is alive! 🎬\n\nUse /match to start swiping.", { reply_markup: { remove_keyboard: true } });
 
       // Auto-start matching
       try {
@@ -2118,10 +2143,10 @@ bot.on(["photo", "video"], async (ctx) => {
       // CREATE FLOW - Multiple photos (2-3)
       // Initialize photos array if not exists
       if (!session.photos) session.photos = [];
-      
+
       // Add this photo to the array
       session.photos.push(fileId);
-      
+
       // Check if we have enough photos (2-3)
       if (session.photos.length >= 3) {
         // User has uploaded 3 photos, save profile
@@ -2154,9 +2179,9 @@ bot.on(["photo", "video"], async (ctx) => {
         session.shown = [];
         session.queue = null;
         session.lastPreference = null;
-        
-        await ctx.reply("🔥 All photos saved! Your profile is now complete ❤️\n\nUse /match to start swiping, or /profile to view your new profile.");
-        
+
+        await ctx.reply("🔥 All photos saved! Your profile is now complete ❤️\n\nUse /match to start swiping, or /profile to view your new profile.", { reply_markup: { remove_keyboard: true } });
+
         // Auto-start matching
         try {
           await showNext(userId, ctx);
@@ -2179,7 +2204,7 @@ bot.on(["photo", "video"], async (ctx) => {
       }
     }
   }
-  
+
 
   // 2) EDIT FLOW - Allow updating media (photos OR video)
   if (session.step === "edit_photo") {
@@ -2211,7 +2236,7 @@ bot.on(["photo", "video"], async (ctx) => {
       session.editPhotos = null;
 
       await ctx.reply("🎥 Your profile video has been updated! 🎬");
-      
+
       try {
         await showNext(userId, ctx);
       } catch (e) {
@@ -2230,15 +2255,15 @@ bot.on(["photo", "video"], async (ctx) => {
       if (!session.editPhotos) {
         session.editPhotos = user.photos || (user.photo ? [user.photo] : []);
       }
-      
+
       // Add new photo
       session.editPhotos.push(fileId);
-      
+
       // Limit to 3 photos max
       if (session.editPhotos.length > 3) {
         session.editPhotos = session.editPhotos.slice(-3); // Keep last 3
       }
-      
+
       // If user has 2+ photos, ask if done or want to add more
       if (session.editPhotos.length >= 2) {
         const keyboard = Markup.inlineKeyboard([
@@ -2266,9 +2291,20 @@ bot.on(["photo", "video"], async (ctx) => {
 // -------------------------------------------
 bot.command("match", async (ctx) => {
   try {
+    const session = getSession(ctx.from.id);
+    session.step = null;
+
+    // Explicitly remove any stuck reply keyboards (like the location request)
+    try {
+      const msg = await ctx.reply("🔍 Finding matches...", { reply_markup: { remove_keyboard: true } });
+      setTimeout(() => {
+        ctx.deleteMessage(msg.message_id).catch(() => { });
+      }, 1500);
+    } catch (e) { }
+
     // Await the entire function chain to catch deep errors
     await showNext(ctx.from.id, ctx);
-  } catch(e) {
+  } catch (e) {
     // This catches critical errors that the inner functions failed to handle
     console.error("Critical error in /match command:", e);
     await ctx.reply("❌ An unexpected error occurred while loading profiles. Please try again.");
@@ -2301,13 +2337,13 @@ bot.command("broadcast", async (ctx) => {
   while (await cursor.hasNext()) {
     const user = await cursor.next();
     const targetId = user.id;
-  try {
-    await ctx.telegram.sendMessage(
-  targetId,
-  text,
-  { parse_mode: 'HTML' } // Allows you to send HTML tags in your broadcast message
-);
-    sent++;
+    try {
+      await ctx.telegram.sendMessage(
+        targetId,
+        text,
+        { parse_mode: 'HTML' } // Allows you to send HTML tags in your broadcast message
+      );
+      sent++;
       // Basic rate limiting to avoid hitting Telegram flood limits
       if (sent % 25 === 0) {
         await sleep(1000);
@@ -2328,7 +2364,7 @@ async function getNextCandidate(userId, excludeShown = true) {
   try {
     // Get current user's profile directly from MongoDB
     const me = await usersCollection.findOne({ id: userId });
-    
+
     if (!me) {
       console.log(`[Match Queue] User ${userId} has no profile`);
       return null;
@@ -2419,7 +2455,7 @@ async function showNext(userId, ctx) {
   if (!me) return ctx.reply("❗ Create a profile first: /create");
 
   const session = getSession(userId);
-  
+
   // Check if preference changed - if so, reset shown list
   const currentPreference = me.looking || "men"; // Default to "men" if not set
   if (session.lastPreference !== currentPreference) {
@@ -2438,14 +2474,14 @@ async function showNext(userId, ctx) {
   const availableSwipes = await getAvailableSwipes(userId);
   if (availableSwipes.total <= 0) {
     // Show purchase options
-    const purchaseText = 
+    const purchaseText =
       `⏸️ Daily Swipe Limit Reached!\n\n` +
       `You've used all 20 free swipes today. 🎯\n\n` +
       `Get more swipes to continue matching:\n\n` +
       `• 40 Swipes - 4 ⭐\n` +
       `• 80 Swipes - 10 ⭐\n\n` +
       `Your daily swipes reset tomorrow! 🌅`;
-    
+
     return ctx.reply(purchaseText, swipePurchaseButtons());
   }
 
@@ -2466,29 +2502,29 @@ async function showCandidate(userId, ctx) {
   // Check swipe limit before showing candidate
   const availableSwipes = await getAvailableSwipes(userId);
   if (availableSwipes.total <= 0) {
-    const purchaseText = 
+    const purchaseText =
       `⏸️ Daily Swipe Limit Reached!\n\n` +
       `You've used all 20 free swipes today. 🎯\n\n` +
       `Get more swipes to continue matching:\n\n` +
       `• 40 Swipes - 4 ⭐\n` +
       `• 80 Swipes - 10 ⭐\n\n` +
       `Your daily swipes reset tomorrow! 🌅`;
-    
+
     return ctx.reply(purchaseText, swipePurchaseButtons());
   }
 
   const session = getSession(userId);
-  
+
   // OPTIMIZED: Get candidate directly from MongoDB (no queue needed)
   let target = await getNextCandidate(userId, true);
-  
+
   // If still no candidate, reset shown list and try again
   if (!target) {
     console.log(`[Match Queue] No candidates found, resetting shown list and retrying...`);
     session.shown = [];
     target = await getNextCandidate(userId, true);
   }
-  
+
   // Final check - if still no candidate, there are no users
   if (!target) {
     const totalUsersCount = await usersCollection.countDocuments({});
@@ -2506,10 +2542,10 @@ async function showCandidate(userId, ctx) {
 
   // Format intention text
   const intentionText = target.intention === "serious" ? "Serious relationship" :
-                       target.intention === "casual" ? "Casual dating" :
-                       target.intention === "friendship" ? "Friendship only" :
-                       target.intention === "exploring" ? "Just exploring 😏" :
-                       "";
+    target.intention === "casual" ? "Casual dating" :
+      target.intention === "friendship" ? "Friendship only" :
+        target.intention === "exploring" ? "Just exploring 😏" :
+          "";
 
   const myInterestKeys = Array.isArray(userExists.interests) ? userExists.interests : [];
   const theirInterestKeys = Array.isArray(target.interests) ? target.interests : [];
@@ -2552,14 +2588,14 @@ async function showCandidate(userId, ctx) {
           parse_mode: 'HTML',
           ...buttons
         }),
-        new Promise((_, reject) => 
+        new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Video send timeout')), 15000)
         )
       ]);
     } else {
       // 2) Fallback to photos (support multiple photos 2-3)
       const photos = target.photos || (target.photo ? [target.photo] : []);
-      
+
       if (photos.length > 0) {
         if (photos.length === 1) {
           // Single photo - can attach buttons directly
@@ -2569,7 +2605,7 @@ async function showCandidate(userId, ctx) {
               parse_mode: 'HTML',
               ...buttons
             }),
-            new Promise((_, reject) => 
+            new Promise((_, reject) =>
               setTimeout(() => reject(new Error('Photo send timeout')), 10000)
             )
           ]);
@@ -2581,14 +2617,14 @@ async function showCandidate(userId, ctx) {
             caption: index === 0 ? candidateText : undefined, // Only caption on first photo
             parse_mode: index === 0 ? 'HTML' : undefined
           }));
-          
+
           await Promise.race([
             ctx.replyWithMediaGroup(media),
-            new Promise((_, reject) => 
+            new Promise((_, reject) =>
               setTimeout(() => reject(new Error('Photo send timeout')), 10000)
             )
           ]);
-          
+
           // Send buttons separately after the media group (Telegram doesn't support buttons on media groups)
           await ctx.reply("🔥 <b>Looks like a nice profile!</b> Ready to make a move?", { parse_mode: 'HTML', ...buttons });
         }
@@ -2614,7 +2650,7 @@ async function showCandidate(userId, ctx) {
 bot.action(/skip_(.+)/, async (ctx) => {
   const userId = ctx.from.id;
   await ctx.answerCbQuery("Skipped ❌");
-  
+
   // OPTIMIZED: Quick profile check with direct MongoDB query
   const user = await usersCollection.findOne({ id: userId }, { projection: { purchasedSwipes: 1 } });
   if (!user) {
@@ -2624,14 +2660,14 @@ bot.action(/skip_(.+)/, async (ctx) => {
   // Check swipe limit
   const availableSwipes = await getAvailableSwipes(userId);
   if (availableSwipes.total <= 0) {
-    const purchaseText = 
+    const purchaseText =
       `⏸️ Daily Swipe Limit Reached!\n\n` +
       `You've used all 20 free swipes today. 🎯\n\n` +
       `Get more swipes to continue matching:\n\n` +
       `• 40 Swipes - 4 ⭐\n` +
       `• 80 Swipes - 10 ⭐\n\n` +
       `Your daily swipes reset tomorrow! 🌅`;
-    
+
     return ctx.reply(purchaseText, swipePurchaseButtons());
   }
 
@@ -2660,8 +2696,8 @@ bot.action(/skip_(.+)/, async (ctx) => {
     await showCandidate(userId, ctx);
   } catch (e) {
     console.error("Error on skip action:", e);
-      // Retry showing candidate (will fetch from MongoDB directly)
-      await showCandidate(userId, ctx);
+    // Retry showing candidate (will fetch from MongoDB directly)
+    await showCandidate(userId, ctx);
   }
 });
 
@@ -2670,48 +2706,48 @@ bot.action(/skip_(.+)/, async (ctx) => {
 // -------------------------------------------
 bot.action(/message_(.+)/, async (ctx) => {
   const userId = ctx.from.id;
-  
+
   // OPTIMIZED: Quick profile check with direct MongoDB query
   const userExists = await usersCollection.findOne({ id: userId }, { projection: { id: 1 } });
   if (!userExists) {
     await ctx.answerCbQuery("Please create your profile first.");
     return ctx.reply("❗ We lost your profile due to major upgrade to the bot. Please create it again: /create");
   }
-  
+
   // Check swipe limit - if reached, show purchase options instead
   const availableSwipes = await getAvailableSwipes(userId);
   if (availableSwipes.total <= 0) {
     await ctx.answerCbQuery("Daily swipe limit reached");
-    const purchaseText = 
+    const purchaseText =
       `⏸️ Daily Swipe Limit Reached!\n\n` +
       `You've used all 20 free swipes today. 🎯\n\n` +
       `Get more swipes to continue matching:\n\n` +
       `• 40 Swipes - 4 ⭐\n` +
       `• 80 Swipes - 10 ⭐\n\n` +
       `Your daily swipes reset tomorrow! 🌅`;
-    
+
     return ctx.reply(purchaseText, swipePurchaseButtons());
   }
-  
+
   const fullMatch = ctx.match[0] || ctx.match.input;
   const targetIdStr = fullMatch.replace("message_", "");
   const targetId = parseInt(targetIdStr);
-  
+
   // OPTIMIZED: Direct MongoDB query for target user
   const targetUser = await usersCollection.findOne({ id: targetId });
   if (!targetUser) {
     await ctx.answerCbQuery("User not found");
     return showCandidate(userId, ctx);
   }
-  
+
   // Set session to wait for message
   const session = getSession(userId);
   session.step = `waiting_message_${targetId}`;
   session.messageTargetId = targetId;
-  
+
   await ctx.answerCbQuery();
   await ctx.reply(`💌 Write or record a message for ${targetUser.name || "this user"}:\n\nYou can send a text, a video, or a circle video note now — or continue browsing by clicking Skip/Like.`);
-  
+
   // DON'T auto-continue here - wait for user to send message or click skip/like
   // The text handler will process the message and continue
   // Skip/like handlers will clear the message step and continue
@@ -2724,36 +2760,36 @@ bot.action(/report_(.+)/, async (ctx) => {
   try {
     const userId = ctx.from.id;
     const db = await loadDB();
-    
+
     // Ensure profile exists
     if (!db.users[userId]) {
       await ctx.answerCbQuery("Please create your profile first.");
       return ctx.reply("❗ We lost your profile due to major upgrade to the bot. Please create it again: /create");
     }
-    
+
     const fullMatch = ctx.match[0] || ctx.match.input;
     const targetIdStr = fullMatch.replace("report_", "");
     const targetId = parseInt(targetIdStr);
-    
+
     const targetUser = db.users[targetId];
     const me = db.users[userId];
-    
+
     if (!targetUser) {
       await ctx.answerCbQuery("User not found");
       return;
     }
-    
+
     // Check if already reported
     const existingReport = await reportsCollection.findOne({
       reporterId: userId,
       reportedId: targetId
     });
-    
+
     if (existingReport) {
       await ctx.answerCbQuery("You already reported this user", { show_alert: true });
       return;
     }
-    
+
     // Add report
     const reportData = {
       reporterId: userId,
@@ -2762,12 +2798,12 @@ bot.action(/report_(.+)/, async (ctx) => {
       reportedName: targetUser.name || "Unknown",
       timestamp: Date.now()
     };
-    
+
     await saveReport(reportData);
-    
+
     await ctx.answerCbQuery("🚫 User reported", { show_alert: true });
     await ctx.reply("✅ Thank you for reporting. We'll review this user.\n\nContinuing with matches...");
-    
+
     // Continue showing profiles
     try {
       await showCandidate(userId, ctx);
@@ -2789,90 +2825,90 @@ bot.action(/report_(.+)/, async (ctx) => {
 // -------------------------------------------
 bot.action(/like_(.+)/, async (ctx) => {
   try {
-  const userId = ctx.from.id;
-  
-  const fullMatch = ctx.match[0] || ctx.match.input;
-  const targetIdStr = fullMatch.replace("like_", "");
-  const targetId = parseInt(targetIdStr); // Telegram IDs are numbers
+    const userId = ctx.from.id;
+
+    const fullMatch = ctx.match[0] || ctx.match.input;
+    const targetIdStr = fullMatch.replace("like_", "");
+    const targetId = parseInt(targetIdStr); // Telegram IDs are numbers
     const userIdNum = parseInt(userId);
 
-  const db = await loadDB();
-  const me = db.users[userId];
-  const them = db.users[targetId];
+    const db = await loadDB();
+    const me = db.users[userId];
+    const them = db.users[targetId];
 
-  try {
-    await ctx.answerCbQuery("❤️");
-  } catch (e) {
-    // ignore
-  }
+    try {
+      await ctx.answerCbQuery("❤️");
+    } catch (e) {
+      // ignore
+    }
 
-  // If the current user's profile is missing (e.g., deleted), ask to recreate
-  if (!me) {
-    await ctx.answerCbQuery("Please recreate your profile.");
-    return ctx.reply("❗ We lost your profile due to major upgrade to the bot. Please create it again: /create");
-  }
+    // If the current user's profile is missing (e.g., deleted), ask to recreate
+    if (!me) {
+      await ctx.answerCbQuery("Please recreate your profile.");
+      return ctx.reply("❗ We lost your profile due to major upgrade to the bot. Please create it again: /create");
+    }
 
-  if (!them || !me) {
-    await ctx.answerCbQuery("User or your profile not found 😢");
+    if (!them || !me) {
+      await ctx.answerCbQuery("User or your profile not found 😢");
       // Show next candidate (will fetch from MongoDB directly)
       const session = getSession(userId);
       return showCandidate(userId, ctx);
-  }
+    }
 
-  // Ensure arrays exist
-  if (!me.likes) me.likes = [];
-  if (!me.matches) me.matches = [];
-  if (!them.likes) them.likes = [];
-  if (!them.matches) them.matches = [];
+    // Ensure arrays exist
+    if (!me.likes) me.likes = [];
+    if (!me.matches) me.matches = [];
+    if (!them.likes) them.likes = [];
+    if (!them.matches) them.matches = [];
 
-  // Check swipe limit before processing like
-  const availableSwipes = await getAvailableSwipes(userId);
-  if (availableSwipes.total <= 0) {
-    await ctx.answerCbQuery("Daily swipe limit reached");
-    const purchaseText = 
-      `⏸️ Daily Swipe Limit Reached!\n\n` +
-      `You've used all 20 free swipes today. 🎯\n\n` +
-      `Get more swipes to continue matching:\n\n` +
-      `• 40 Swipes - 4 ⭐\n` +
-      `• 80 Swipes - 10 ⭐\n\n` +
-      `Your daily swipes reset tomorrow! 🌅`;
-    
-    return ctx.reply(purchaseText, swipePurchaseButtons());
-  }
+    // Check swipe limit before processing like
+    const availableSwipes = await getAvailableSwipes(userId);
+    if (availableSwipes.total <= 0) {
+      await ctx.answerCbQuery("Daily swipe limit reached");
+      const purchaseText =
+        `⏸️ Daily Swipe Limit Reached!\n\n` +
+        `You've used all 20 free swipes today. 🎯\n\n` +
+        `Get more swipes to continue matching:\n\n` +
+        `• 40 Swipes - 4 ⭐\n` +
+        `• 80 Swipes - 10 ⭐\n\n` +
+        `Your daily swipes reset tomorrow! 🌅`;
 
-  // Normalize existing IDs in arrays to numbers
-  me.likes = me.likes.map(id => parseInt(id)).filter(id => !isNaN(id));
-  me.matches = me.matches.map(id => parseInt(id)).filter(id => !isNaN(id));
-  them.likes = them.likes.map(id => parseInt(id)).filter(id => !isNaN(id));
-  them.matches = them.matches.map(id => parseInt(id)).filter(id => !isNaN(id));
+      return ctx.reply(purchaseText, swipePurchaseButtons());
+    }
 
-  // Add like to current user's profile (store as number)
-  if (!me.likes.includes(targetId)) {
-    me.likes.push(targetId);
-  }
-  
-  // Increment swipe count (use purchased swipes first, then free)
-  let updatedPurchasedSwipes = me.purchasedSwipes || 0;
-  if (updatedPurchasedSwipes > 0) {
-    // Use purchased swipe
-    updatedPurchasedSwipes = updatedPurchasedSwipes - 1;
-  } else {
-    // Use free daily swipe
-    await incrementDailySwipes(userId);
-  }
+    // Normalize existing IDs in arrays to numbers
+    me.likes = me.likes.map(id => parseInt(id)).filter(id => !isNaN(id));
+    me.matches = me.matches.map(id => parseInt(id)).filter(id => !isNaN(id));
+    them.likes = them.likes.map(id => parseInt(id)).filter(id => !isNaN(id));
+    them.matches = them.matches.map(id => parseInt(id)).filter(id => !isNaN(id));
 
-  let matchFound = false;
+    // Add like to current user's profile (store as number)
+    if (!me.likes.includes(targetId)) {
+      me.likes.push(targetId);
+    }
 
-  // Check if THEY like YOU (compare as numbers)
-  if (them.likes.includes(userIdNum)) {
-    matchFound = true;
-    
-    // Update match arrays (store as numbers)
-    if (!me.matches.includes(targetId)) me.matches.push(targetId);
-    if (!them.matches.includes(userIdNum)) them.matches.push(userIdNum);
+    // Increment swipe count (use purchased swipes first, then free)
+    let updatedPurchasedSwipes = me.purchasedSwipes || 0;
+    if (updatedPurchasedSwipes > 0) {
+      // Use purchased swipe
+      updatedPurchasedSwipes = updatedPurchasedSwipes - 1;
+    } else {
+      // Use free daily swipe
+      await incrementDailySwipes(userId);
+    }
 
-    // Notify BOTH users about the match
-    try {
+    let matchFound = false;
+
+    // Check if THEY like YOU (compare as numbers)
+    if (them.likes.includes(userIdNum)) {
+      matchFound = true;
+
+      // Update match arrays (store as numbers)
+      if (!me.matches.includes(targetId)) me.matches.push(targetId);
+      if (!them.matches.includes(userIdNum)) them.matches.push(userIdNum);
+
+      // Notify BOTH users about the match
+      try {
         const matchMessage = `🎉❤️ IT'S A MATCH!\n\n${me.name} liked you back!\n\nSend them a message: ${me.username || ctx.from.username ? `@${me.username || ctx.from.username}` : `[${me.name || "User"}](tg://user?id=${userId})`}`;
         await Promise.race([
           ctx.telegram.sendMessage(
@@ -2880,73 +2916,73 @@ bot.action(/like_(.+)/, async (ctx) => {
             matchMessage,
             { parse_mode: 'Markdown' }
           ),
-          new Promise((_, reject) => 
+          new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Message send timeout')), 10000)
           )
         ]);
-    } catch (e) {
-      console.error(`[ERROR] Could not message target user ${targetId} (blocked bot?):`, e.message);
+      } catch (e) {
+        console.error(`[ERROR] Could not message target user ${targetId} (blocked bot?):`, e.message);
+      }
+
+      await ctx.reply(`🔥 You MATCHED with ${them.name}!\nUse /matches to see list.`);
+    } else {
+      // They don't like you yet - notify them that someone liked them
+
+      // Add to their recentLikes array (most recent at the end, so we can reverse to show newest first)
+      if (!them.recentLikes) them.recentLikes = [];
+      them.recentLikes = them.recentLikes.map(id => parseInt(id)).filter(id => !isNaN(id));
+      // Remove if already exists (to avoid duplicates), then add to end (most recent)
+      them.recentLikes = them.recentLikes.filter(id => id !== userIdNum);
+      them.recentLikes.push(userIdNum); // Add to end = most recent
+
+      // Send notification to the person you liked
+      try {
+        await Promise.race([
+          ctx.telegram.sendMessage(
+            targetId,
+            `❤️ Someone liked you!\n\nSee who it is: /matches`
+          ),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Message send timeout')), 10000)
+          )
+        ]);
+      } catch (e) {
+        console.error(`[ERROR] Could not message target user ${targetId} (blocked bot?):`, e.message);
+      }
     }
 
-    await ctx.reply(`🔥 You MATCHED with ${them.name}!\nUse /matches to see list.`);
-  } else {
-    // They don't like you yet - notify them that someone liked them
-    
-    // Add to their recentLikes array (most recent at the end, so we can reverse to show newest first)
-    if (!them.recentLikes) them.recentLikes = [];
-    them.recentLikes = them.recentLikes.map(id => parseInt(id)).filter(id => !isNaN(id));
-    // Remove if already exists (to avoid duplicates), then add to end (most recent)
-    them.recentLikes = them.recentLikes.filter(id => id !== userIdNum);
-    them.recentLikes.push(userIdNum); // Add to end = most recent
-    
-    // Send notification to the person you liked
+    // IMPORTANT: Save database FIRST, then rebuild queue
+    await updateUserArrays(userId, { likes: me.likes, matches: me.matches, purchasedSwipes: updatedPurchasedSwipes });
+    await updateUserArrays(targetId, { likes: them.likes, matches: them.matches, recentLikes: them.recentLikes });
+
+    // Rebuild queue fresh after like/match (excludes the person just liked/matched)
+    const session = getSession(userId);
+
+    // Clear message step if user was waiting to send a message
+    if (session.step && session.step.startsWith("waiting_message_")) {
+      session.step = null;
+      session.messageTargetId = null;
+    }
+
+    // Disable buttons to prevent double taps, but don't edit visible text/caption
     try {
-      await Promise.race([
-        ctx.telegram.sendMessage(
-          targetId,
-          `❤️ Someone liked you!\n\nSee who it is: /matches`
-        ),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Message send timeout')), 10000)
-        )
-      ]);
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
     } catch (e) {
-      console.error(`[ERROR] Could not message target user ${targetId} (blocked bot?):`, e.message);
+      // ignore
     }
-  }
 
-  // IMPORTANT: Save database FIRST, then rebuild queue
-  await updateUserArrays(userId, { likes: me.likes, matches: me.matches, purchasedSwipes: updatedPurchasedSwipes });
-  await updateUserArrays(targetId, { likes: them.likes, matches: them.matches, recentLikes: them.recentLikes });
-  
-  // Rebuild queue fresh after like/match (excludes the person just liked/matched)
-  const session = getSession(userId);
-  
-  // Clear message step if user was waiting to send a message
-  if (session.step && session.step.startsWith("waiting_message_")) {
-    session.step = null;
-    session.messageTargetId = null;
-  }
-  
-  // Disable buttons to prevent double taps, but don't edit visible text/caption
-  try {
-    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-  } catch (e) {
-    // ignore
-  }
+    if (matchFound) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    } else {
+      await new Promise(resolve => setTimeout(resolve, 350));
+    }
 
-  if (matchFound) {
-    await new Promise(resolve => setTimeout(resolve, 1500));
-  } else {
-    await new Promise(resolve => setTimeout(resolve, 350));
-  }
-  
-  // Show next candidate (will fetch from MongoDB directly)
-  try {
-    await showCandidate(userId, ctx);
-  } catch(e) {
-    console.error("Error after like action:", e);
-  }
+    // Show next candidate (will fetch from MongoDB directly)
+    try {
+      await showCandidate(userId, ctx);
+    } catch (e) {
+      console.error("Error after like action:", e);
+    }
   } catch (error) {
     console.error("Error in like action:", error);
     try {
@@ -2972,7 +3008,7 @@ bot.command(["delete", "delet"], async (ctx) => {
     // Set session to wait for deletion reason
     const session = getSession(userId);
     session.waitingForDeletionReason = true;
-    
+
     await ctx.reply("Before we delete your account, could you please tell us why you're leaving? This helps us improve the bot. Just send your reason as a message.");
   } catch (error) {
     console.error("Error in delete command:", error);
@@ -2996,27 +3032,27 @@ bot.command("matches", async (ctx) => {
 
     const userIdNum = parseInt(ctx.from.id);
     const myMatches = (me.matches || []).map(id => parseInt(id)).filter(id => !isNaN(id));
-    
+
     // Get recentLikes in reverse order (most recent first)
     const recentLikes = (me.recentLikes || []).map(id => parseInt(id)).filter(id => !isNaN(id));
-    const recentLikesReversed = [...recentLikes].reverse(); 
+    const recentLikesReversed = [...recentLikes].reverse();
 
     // Find people who liked you
     const peopleWhoLikedYou = [];
-    const recentLikesSet = new Set(recentLikesReversed); 
-    
+    const recentLikesSet = new Set(recentLikesReversed);
+
     for (const [otherId, otherUser] of Object.entries(db.users)) {
       if (!otherUser || !otherUser.id) continue;
-      
+
       const otherIdNum = parseInt(otherId);
       if (isNaN(otherIdNum) || otherIdNum === userIdNum) continue;
 
       // Only show people who are mutually compatible with me w.r.t gender preferences.
       // "any" means "I accept both", but we STILL require that they also accept my gender.
       if (!isCompatible(me, otherUser)) continue;
-      
+
       const theirLikes = (otherUser.likes || []).map(id => parseInt(id)).filter(id => !isNaN(id));
-      
+
       // If they liked you AND you haven't matched with them
       if (theirLikes.includes(userIdNum) && !myMatches.includes(otherIdNum)) {
         peopleWhoLikedYou.push({
@@ -3028,7 +3064,7 @@ bot.command("matches", async (ctx) => {
 
     const recentLikesProfiles = [];
     const olderLikesProfiles = [];
-    
+
     for (const { user, isRecent } of peopleWhoLikedYou) {
       if (isRecent) {
         recentLikesProfiles.push(user);
@@ -3054,23 +3090,23 @@ bot.command("matches", async (ctx) => {
     // ----------------------------
     if (recentLikesProfiles.length > 0) {
       await ctx.reply(`🔥 ${recentLikesProfiles.length} recent like${recentLikesProfiles.length > 1 ? 's' : ''} (newest first):`);
-      
+
       for (const person of recentLikesProfiles) {
         // Format intention
         const intentionText = person.intention === "serious" ? "Serious relationship" :
-                             person.intention === "casual" ? "Casual dating" :
-                             person.intention === "friendship" ? "Friendship only" :
-                             person.intention === "exploring" ? "Just exploring 😏" :
-                             "";
-        
+          person.intention === "casual" ? "Casual dating" :
+            person.intention === "friendship" ? "Friendship only" :
+              person.intention === "exploring" ? "Just exploring 😏" :
+                "";
+
         // FIX 1: Escape the username for MarkdownV2
-        const personContact = person.username 
-          ? `@${escapeMarkdown(person.username)}` 
+        const personContact = person.username
+          ? `@${escapeMarkdown(person.username)}`
           : `[${escapeMarkdown(person.name || "User")}](tg://user?id=${person.id})`;
-          
+
         const interestsText = formatInterests(person.interests);
         const safeLocation = escapeMarkdown(person.location || "Not set");
-        const profileText = 
+        const profileText =
           `👤 ${escapeMarkdown(person.name || "Unknown")}, ${escapeMarkdown(String(person.age || "?"))}\n\n` +
           `📍 Location: ${safeLocation}\n\n` +
           `⚧️ ${person.gender === "male" ? "♂️ Male" : "♀️ Female"}\n\n` +
@@ -3078,7 +3114,7 @@ bot.command("matches", async (ctx) => {
           `${interestsText ? `🏷️ ${escapeMarkdown(interestsText)}\n\n` : ""}` +
           `📝 ${escapeMarkdown(person.bio || "No bio")}\n\n` +
           `💬 ${personContact}`;
-        
+
         const likeBackButtons = Markup.inlineKeyboard([
           [
             Markup.button.callback("❌ Skip", `skip_${person.id}`),
@@ -3103,7 +3139,7 @@ bot.command("matches", async (ctx) => {
           }
         } else {
           const photos = person.photos || (person.photo ? [person.photo] : []);
-          
+
           if (photos.length > 0) {
             if (photos.length === 1) {
               // Single photo
@@ -3126,7 +3162,7 @@ bot.command("matches", async (ctx) => {
                   caption: index === 0 ? profileText : undefined,
                   parse_mode: 'MarkdownV2' // FIX 3: Add parse_mode to media group
                 }));
-                
+
                 await ctx.replyWithMediaGroup(media);
                 await ctx.reply("🔥 Looks like a nice profile! Ready to make a move?", likeBackButtons);
               } catch (mediaError) {
@@ -3143,7 +3179,7 @@ bot.command("matches", async (ctx) => {
           }
         }
       }
-      
+
       // Clear recentLikes
       await updateUserArrays(ctx.from.id, { recentLikes: [] });
     }
@@ -3153,22 +3189,22 @@ bot.command("matches", async (ctx) => {
     // ----------------------------
     if (olderLikesProfiles.length > 0) {
       await ctx.reply(`\n❤️ ${olderLikesProfiles.length} other person${olderLikesProfiles.length > 1 ? 's' : ''} liked you:`);
-      
+
       for (const person of olderLikesProfiles) {
         const intentionText = person.intention === "serious" ? "Serious relationship" :
-                             person.intention === "casual" ? "Casual dating" :
-                             person.intention === "friendship" ? "Friendship only" :
-                             person.intention === "exploring" ? "Just exploring 😏" :
-                             "";
-        
+          person.intention === "casual" ? "Casual dating" :
+            person.intention === "friendship" ? "Friendship only" :
+              person.intention === "exploring" ? "Just exploring 😏" :
+                "";
+
         // FIX 5: Escape username here too
-        const personContact = person.username 
-          ? `@${escapeMarkdown(person.username)}` 
+        const personContact = person.username
+          ? `@${escapeMarkdown(person.username)}`
           : `[${escapeMarkdown(person.name || "User")}](tg://user?id=${person.id})`;
-          
+
         const interestsText = formatInterests(person.interests);
         const safeLocation = escapeMarkdown(person.location || "Not set");
-        const profileText = 
+        const profileText =
           `👤 ${escapeMarkdown(person.name || "Unknown")}, ${escapeMarkdown(String(person.age || "?"))}\n\n` +
           `📍 Location: ${safeLocation}\n\n` +
           `⚧️ ${person.gender === "male" ? "♂️ Male" : "♀️ Female"}\n\n` +
@@ -3176,7 +3212,7 @@ bot.command("matches", async (ctx) => {
           `${interestsText ? `🏷️ ${escapeMarkdown(interestsText)}\n\n` : ""}` +
           `📝 ${escapeMarkdown(person.bio || "No bio")}\n\n` +
           `💬 ${personContact}`;
-        
+
         const likeBackButtons = Markup.inlineKeyboard([
           [
             Markup.button.callback("❌ Skip", `skip_${person.id}`),
@@ -3201,7 +3237,7 @@ bot.command("matches", async (ctx) => {
           }
         } else {
           const photos = person.photos || (person.photo ? [person.photo] : []);
-          
+
           if (photos.length > 0) {
             if (photos.length === 1) {
               try {
@@ -3247,17 +3283,17 @@ bot.command("matches", async (ctx) => {
         const idNum = parseInt(id);
         const u = db.users[idNum] || db.users[id] || db.users[String(id)];
         if (u && u.id) {
-          const contact = u.username 
+          const contact = u.username
             ? `@${escapeMarkdown(u.username)}` // FIX 9: Escape username
             : `[${escapeMarkdown(u.name || "User")}](tg://user?id=${idNum})`;
-            
+
           matchesText += `• ${escapeMarkdown(u.name || "Unknown")} (${escapeMarkdown(String(u.age || "?"))}) — ${contact}\n`;
         }
       }
 
       await ctx.reply(matchesText, { parse_mode: 'MarkdownV2' }); // FIX 10: Use MarkdownV2
     }
- } catch (error) {
+  } catch (error) {
     console.error("Error in matches command:", error);
     // Message removed so the bot stays silent on error
   }
@@ -3267,7 +3303,7 @@ bot.command("matches", async (ctx) => {
 // ❤️ /help — SHOW SAFETY FEATURES
 // -------------------------------------------
 bot.command("help", async (ctx) => {
-  const helpText = 
+  const helpText =
     "🛡️ How We Protect Users for Safe Interaction 😎\n\n" +
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
     "1️⃣ **Privacy Protection** 👀\n" +
@@ -3280,7 +3316,7 @@ bot.command("help", async (ctx) => {
     "Your safety is our priority! ❤️\n\n" +
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
     "Stay safe and have fun! 😊";
-  
+
   await ctx.reply(helpText, { parse_mode: 'Markdown' });
 });
 
@@ -3292,11 +3328,11 @@ bot.action(/buy_swipes_(.+)/, async (ctx) => {
   try {
     const userId = ctx.from.id;
     const packageType = ctx.match[1]; // '40' or '80'
-    
+
     await ctx.answerCbQuery("Creating payment link...");
-    
+
     const { invoiceLink, package: pkg } = await createSwipePackageInvoice(userId, packageType);
-    
+
     // Send invoice link to user
     await ctx.reply(
       `💳 Purchase ${pkg.title}\n\n` +
@@ -3323,19 +3359,19 @@ bot.on('pre_checkout_query', async (ctx) => {
   try {
     const query = ctx.preCheckoutQuery;
     const payload = query.invoice_payload;
-    
+
     // Verify payload format: swipes_40_userId_timestamp or swipes_80_userId_timestamp
     if (!payload.startsWith('swipes_')) {
       await ctx.answerPreCheckoutQuery(false, { error_message: "Invalid payment payload" });
       return;
     }
-    
+
     const parts = payload.split('_');
     if (parts.length < 3) {
       await ctx.answerPreCheckoutQuery(false, { error_message: "Invalid payment format" });
       return;
     }
-    
+
     // Approve the payment
     await ctx.answerPreCheckoutQuery(true);
   } catch (error) {
@@ -3350,42 +3386,42 @@ bot.on('successful_payment', async (ctx) => {
     const payment = ctx.message.successful_payment;
     const payload = payment.invoice_payload;
     const userId = ctx.from.id;
-    
+
     // Parse payload: swipes_40_userId_timestamp or swipes_80_userId_timestamp
     const parts = payload.split('_');
     if (parts.length < 3 || parts[0] !== 'swipes') {
       console.error("Invalid payment payload:", payload);
       return;
     }
-    
+
     const packageType = parts[1]; // '40' or '80'
     const swipesToAdd = parseInt(packageType);
-    
+
     if (isNaN(swipesToAdd) || (swipesToAdd !== 40 && swipesToAdd !== 80)) {
       console.error("Invalid swipe package:", packageType);
       return;
     }
-    
+
     // Get current user data
     const db = await loadDB();
     const user = db.users[userId];
-    
+
     if (!user) {
       await ctx.reply("❌ User profile not found. Please create a profile first: /create");
       return;
     }
-    
+
     // Add purchased swipes to user account
     const currentPurchased = user.purchasedSwipes || 0;
     const newPurchased = currentPurchased + swipesToAdd;
-    
+
     await updateUserArrays(userId, {
       purchasedSwipes: newPurchased
     });
-    
+
     // Get updated swipe info
     const availableSwipes = await getAvailableSwipes(userId);
-    
+
     // Confirm payment and show updated swipe count
     await ctx.reply(
       `✅ Payment Successful! 🎉\n\n` +
@@ -3396,7 +3432,7 @@ bot.on('successful_payment', async (ctx) => {
       `• Total available: ${availableSwipes.total}\n\n` +
       `Use /match to continue swiping! 🚀`
     );
-    
+
     // If user was waiting to swipe, continue showing profiles
     const session = getSession(userId);
     try {
@@ -3419,7 +3455,7 @@ bot.catch((err, ctx) => {
   console.error(`[ERROR] Error message:`, err.message);
   console.error(`[ERROR] Error stack:`, err.stack);
   console.error(`[ERROR] Full error:`, err);
-  
+
   // Only send error message if we have a valid context with reply method
   if (ctx && typeof ctx.reply === 'function') {
     try {
@@ -3443,11 +3479,11 @@ let lastHealthCheck = Date.now();
 setInterval(() => {
   const now = Date.now();
   const timeSinceLastCheck = now - lastHealthCheck;
-  
+
   if (timeSinceLastCheck > 600000) { // 10 minutes
     console.warn("[HEALTH] Warning: No activity detected for 10+ minutes");
   }
-  
+
   lastHealthCheck = now;
   console.log("[HEALTH] Bot is alive and running");
 }, 300000); // Every 5 minutes
@@ -3458,12 +3494,12 @@ connectDB().then((connected) => {
     console.error("[FATAL] Failed to connect to MongoDB. Exiting...");
     process.exit(1);
   }
-  
+
   return bot.launch();
 }).then(async () => {
   console.log("❤️ EthioMatch is running...");
   lastHealthCheck = Date.now();
-  
+
   // Set bot commands menu
   try {
     await bot.telegram.setMyCommands([
